@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: electoral_data_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: electoral
+      POSTGRES_PASSWORD: electoral_dev_password
+      POSTGRES_DB: electoral_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./docker/data/postgres:/var/lib/postgresql/data:Z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U electoral -d electoral_data"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # app:
+  #   Servicio de aplicación para desarrollo/producción se definirá al instalar dependencias y configurar el build.
