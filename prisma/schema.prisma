@@ -1,0 +1,397 @@
+// ELECTORAL DATA - Esquema preliminar de base de datos
+// Modelo: CONFIDENCIAL O SEUDONIMIZADO (no anónimo)
+// Separación estricta entre dominio de identificación/participación y dominio de respuestas políticas.
+// - No almacenar cédula en texto plano.
+// - No relacionar directamente identificación con preferencias de voto.
+// - Respuestas vinculadas solo a participation_id interno opaco.
+// - Unicidad de participación por encuesta (A1).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPERADMIN
+  CAMPAIGN_ADMIN
+  ANALYST
+  ENUMERATOR
+}
+
+enum SurveyStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+  ARCHIVED
+}
+
+enum SurveyChannel {
+  PUBLIC
+  ENUMERATOR
+  BOTH
+}
+
+enum SubmissionChannel {
+  PUBLIC
+  ENUMERATOR
+}
+
+enum SubmissionQuality {
+  VALID
+  OBSERVED
+  REJECTED
+}
+
+enum ParticipationStatus {
+  ACTIVE
+  USED
+  REVOKED
+}
+
+enum FigureCondition {
+  FIGURE
+  POTENTIAL_PRE_CANDIDATE
+  OFFICIALLY_REGISTERED_CANDIDATE
+  OTHER
+}
+
+// ============================
+// Dominio operativo y catálogos
+// ============================
+
+model Province {
+  id        String   @id @default(cuid())
+  name      String
+  code      String?  @unique
+  active    Boolean  @default(true)
+  cantons   Canton[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Canton {
+  id         String   @id @default(cuid())
+  name       String
+  provinceId String
+  province   Province @relation(fields: [provinceId], references: [id])
+  parishes   Parish[]
+  figures    PoliticalFigure[]
+  campaigns  Campaign[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([provinceId])
+}
+
+model Parish {
+  id        String   @id @default(cuid())
+  name      String
+  cantonId  String
+  canton    Canton   @relation(fields: [cantonId], references: [id])
+  sectors   Sector[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([cantonId])
+}
+
+model Sector {
+  id           String   @id @default(cuid())
+  name         String
+  type         String?  // barrio/sector
+  source       String?  // manual/importado
+  verified     Boolean  @default(false) // no implica oficialidad sin fuente
+  parishId     String
+  parish       Parish   @relation(fields: [parishId], references: [id])
+  submissions  SurveySubmission[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([parishId])
+}
+
+model Campaign {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  status      String   @default("active")
+  startDate   DateTime?
+  endDate     DateTime?
+  cantonId    String?
+  canton      Canton?  @relation(fields: [cantonId], references: [id])
+  surveys     Survey[]
+  assignments CampaignAssignment[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([cantonId])
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         UserRole
+  active       Boolean  @default(true)
+  assignments  CampaignAssignment[]
+  enumeratedSubmissions SurveySubmission[] @relation("EnumeratorSubmissions")
+  auditLogs    AuditLog[] @relation("AuditActor")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model CampaignAssignment {
+  id         String   @id @default(cuid())
+  userId     String
+  campaignId String
+  user       User     @relation(fields: [userId], references: [id])
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, campaignId])
+  @@index([campaignId])
+}
+
+model PoliticalOrganization {
+  id          String   @id @default(cuid())
+  name        String
+  shortName   String?
+  description String?
+  active      Boolean  @default(true)
+  figures     PoliticalFigure[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model PoliticalFigure {
+  id             String   @id @default(cuid())
+  name           String
+  photoUrl       String?
+  organizationId String?
+  organization   PoliticalOrganization? @relation(fields: [organizationId], references: [id])
+  cantonId       String?
+  canton         Canton?  @relation(fields: [cantonId], references: [id])
+  condition      FigureCondition @default(FIGURE)
+  verifiedSource String?  // fuente verificable si aplica
+  description    String?
+  active         Boolean  @default(true)
+  options        QuestionOption[]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([cantonId])
+}
+
+// ============================
+// Constructor de encuestas
+// ============================
+
+model Survey {
+  id               String       @id @default(cuid())
+  campaignId       String
+  campaign         Campaign     @relation(fields: [campaignId], references: [id])
+  title            String
+  description      String?
+  status           SurveyStatus @default(DRAFT)
+  channel          SurveyChannel @default(BOTH)
+  privacyVersion   String?
+  methodologyNote  String?
+  versions         SurveyVersion[]
+  participations   Participation[]
+  participantIdentities ParticipantIdentity[]
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([campaignId])
+}
+
+model SurveyVersion {
+  id          String   @id @default(cuid())
+  surveyId    String
+  survey      Survey   @relation(fields: [surveyId], references: [id])
+  version     Int
+  isPublished Boolean  @default(false)
+  publishedAt DateTime?
+  sections    Section[]
+  questions   Question[]
+  submissions SurveySubmission[]
+  createdAt   DateTime @default(now())
+
+  @@unique([surveyId, version])
+  @@index([surveyId])
+}
+
+model Section {
+  id              String        @id @default(cuid())
+  surveyVersionId String
+  surveyVersion   SurveyVersion @relation(fields: [surveyVersionId], references: [id])
+  title           String
+  order           Int
+  questions       Question[]
+  createdAt       DateTime @default(now())
+
+  @@index([surveyVersionId])
+}
+
+model Question {
+  id              String        @id @default(cuid())
+  surveyVersionId String
+  surveyVersion   SurveyVersion @relation(fields: [surveyVersionId], references: [id])
+  sectionId       String?
+  section         Section?      @relation(fields: [sectionId], references: [id])
+  text            String
+  type            String        // single_choice, multiple_choice, text, scale, etc.
+  required        Boolean       @default(false)
+  order           Int
+  config          Json?
+  options         QuestionOption[]
+  logicRules      LogicRule[]   @relation("SourceQuestionRules")
+  answers         Answer[]
+  createdAt       DateTime @default(now())
+
+  @@index([surveyVersionId])
+  @@index([sectionId])
+}
+
+model QuestionOption {
+  id         String   @id @default(cuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id])
+  label      String
+  value      String
+  order      Int
+  isSpecial  Boolean  @default(false) // otro, ninguno, blanco, nulo, etc.
+  figureId   String?
+  figure     PoliticalFigure? @relation(fields: [figureId], references: [id])
+  createdAt  DateTime @default(now())
+
+  @@index([questionId])
+}
+
+model LogicRule {
+  id               String   @id @default(cuid())
+  sourceQuestionId String
+  sourceQuestion   Question @relation("SourceQuestionRules", fields: [sourceQuestionId], references: [id])
+  operator         String   // equals, not_equals, in, not_in, present, empty
+  value            Json?
+  action           String   // show, hide, jump, require
+  targetType       String?  // question, section
+  targetId         String?
+  createdAt        DateTime @default(now())
+
+  @@index([sourceQuestionId])
+}
+
+// ==============================================
+// Dominio de IDENTIFICACIÓN Y PARTICIPACIÓN (protegido)
+// Sin cédula en texto plano. Separado de respuestas.
+// ==============================================
+
+model ParticipantIdentity {
+  id                String   @id @default(cuid())
+  surveyId          String
+  survey            Survey   @relation(fields: [surveyId], references: [id])
+  // Derivado protegido de cédula (p.ej. HMAC con secreto de servidor). NUNCA la cédula en texto plano.
+  identityHash      String
+  localFormatValid  Boolean  @default(true) // validación local (10 dígitos + verificador), no acredita identidad oficial
+  participation     Participation?
+  createdAt         DateTime @default(now())
+
+  // A1: unicidad de participación por encuesta
+  @@unique([surveyId, identityHash])
+  @@index([surveyId])
+}
+
+model Participation {
+  id                    String   @id @default(cuid())
+  surveyId              String
+  survey                Survey   @relation(fields: [surveyId], references: [id])
+  participantIdentityId String   @unique
+  participantIdentity   ParticipantIdentity @relation(fields: [participantIdentityId], references: [id])
+  status                ParticipationStatus @default(ACTIVE)
+  usedAt                DateTime?
+  submission            SurveySubmission?
+  createdAt             DateTime @default(now())
+
+  @@index([surveyId])
+}
+
+// ==============================================
+// Dominio de RESPUESTAS POLÍTICAS (sensible)
+// Vinculado SOLO a participation_id interno. Sin PII directa.
+// ==============================================
+
+model SurveySubmission {
+  id              String            @id @default(cuid())
+  participationId String            @unique
+  participation   Participation     @relation(fields: [participationId], references: [id])
+  surveyVersionId String
+  surveyVersion   SurveyVersion     @relation(fields: [surveyVersionId], references: [id])
+  channel         SubmissionChannel
+  enumeratorId    String?
+  enumerator      User?             @relation("EnumeratorSubmissions", fields: [enumeratorId], references: [id])
+  sectorId        String?
+  sector          Sector?           @relation(fields: [sectorId], references: [id])
+  quality         SubmissionQuality @default(VALID)
+  qualityNotes    String?
+  startedAt       DateTime?
+  submittedAt     DateTime          @default(now())
+  answers         Answer[]
+  createdAt       DateTime          @default(now())
+
+  @@index([surveyVersionId])
+  @@index([enumeratorId])
+  @@index([sectorId])
+}
+
+model Answer {
+  id           String           @id @default(cuid())
+  submissionId String
+  submission   SurveySubmission @relation(fields: [submissionId], references: [id])
+  questionId   String
+  question     Question         @relation(fields: [questionId], references: [id])
+  // Valor de respuesta (opción, texto, escala, etc.). Puede contener preferencia/opinión sensible.
+  value        Json
+  createdAt    DateTime         @default(now())
+
+  @@index([submissionId])
+  @@index([questionId])
+}
+
+// ============================
+// Auditoría y configuración
+// ============================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id])
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId])
+  @@index([entityType, entityId])
+}
+
+model PrivacyContent {
+  id          String   @id @default(cuid())
+  key         String
+  version     String
+  title       String?
+  body        String
+  effectiveAt DateTime?
+  active      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([key, version])
+}
